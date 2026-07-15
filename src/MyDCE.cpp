@@ -14,7 +14,8 @@ using namespace llvm;
 
 /*
  * This function is used to verify if the istruction is basicaly dead
- * 'mayHaveSideEffects()' -> this single method can cover: volatile operations and atomic
+ * "mayHaveSideEffects()" -> this single method can cover,
+ * operation that alter sthe state of program like: volatile and atomic operations.
  */
 static bool isTriviallyDead(Instruction &I){
   if (I.use_empty() && !I.isTerminator() && !I.mayHaveSideEffects())
@@ -117,15 +118,15 @@ static bool removeUnreachableBlocksLocal(Function &F){
     return false;
 
   
-  /* Remove all the link between the then and cleaning */
+  /* Remove all the link between the them and cleaning */
   for (BasicBlock *BB : stack){
-
     for (BasicBlock *suc : successors(BB)){
       /* Situation in witch the successor is an haltly block */
       if (checked.count(suc)){ 
 	for (PHINode &PN : suc->phis()){
 	  /* Remove the ingress associated with BB
-	   * False params, avoid to delete the phi with one ingress. It's will be eliminated in the next loop, by DCE. */
+	   * False params, avoid to delete the phi with one ingress. It's will be eliminated in the next loop, by DCE.
+	   */
 	  PN.removeIncomingValue(BB, false);
 	}
       }
@@ -133,8 +134,7 @@ static bool removeUnreachableBlocksLocal(Function &F){
     BB->dropAllReferences();
   }
 
-  /*Phisical elimination memory */
-
+  /* Phisical elimination memory. */
   for (BasicBlock *BB : stack)
     BB->eraseFromParent();
   
@@ -146,7 +146,6 @@ static bool removeUnreachableBlocksLocal(Function &F){
  * I decided to avoid bypassing blocks whose successor contains PHI node.
  * Correctly updating the SSA form require additional handling of duplicate incoming edges. 
  */
-
 static bool bypassBlock(Function &F){
   bool changed = false;
   
@@ -164,7 +163,6 @@ static bool bypassBlock(Function &F){
     
     /*Get last istruction of block, and cast it in "BranchInst" */
     BranchInst *BI = dyn_cast<BranchInst>(BB.getTerminator());
-     /* */
     if (!BI || !BI->isUnconditional())
       continue;
 
@@ -182,23 +180,7 @@ static bool bypassBlock(Function &F){
       continue;
 
     SmallVector<BasicBlock *, 16> preds(predecessors(&BB));
-    
-    /* update the PHI of successor to registrate the new predecessor. */
-    for (PHINode &PN : suc->phis()){
-      int indexBlock = PN.getBasicBlockIndex(&BB);
-
-      if (indexBlock < 0)
-	continue; 
-
-      Value *V = PN.getIncomingValue(indexBlock);
-
-      PN.removeIncomingValue(indexBlock, false);
-	
-      for (BasicBlock *pred : preds)
-	PN.addIncoming(V, pred);
-      
-    }
-
+        
     /* Redirect predecessors */
     for (BasicBlock *pred : preds)
       pred->getTerminator()->replaceSuccessorWith(&BB, suc);
@@ -207,6 +189,56 @@ static bool bypassBlock(Function &F){
   }
   
   return changed;
+}
+
+static bool eliminateDeadAllocas(Function &F){
+  SmallVector<AllocaInst *, 16> allocas;
+  bool changed = false;
+
+  /* Populate the "allocas" */
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB )
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(&I))
+	allocas.push_back(AI);
+  
+  for (AllocaInst *AI : allocas){
+    bool removable = true;
+    SmallVector<StoreInst *, 8> stores;
+
+    for (User *U : AI->users()){
+      if (StoreInst *SI = dyn_cast<StoreInst>(U)){
+	
+	/* Only acceptable user
+	 * Check - if the i-th (SI) value, respect:
+	 * 1) destination of writing.
+	 * 2) we're not self saving the i-th value, eg -> store ptr %x, ptr %x
+	 * 3) it's not volatile. 
+	 */
+	if (SI->getPointerOperand() == AI && SI->getValueOperand() != AI && !SI->isVolatile()){
+	  stores.push_back(SI);
+	  continue;
+	}
+      }
+
+      /* Anything else: load, call, GEP, store-escape, or store where alloca is value operand,
+       * that make the adddres observable - bail - out conservative. 
+       */
+      removable = false;
+      break;
+    }
+    
+    if (!removable)
+      continue;
+
+    for(StoreInst *SI : stores)
+      SI->eraseFromParent();
+
+    AI->eraseFromParent();
+
+    changed = true;
+  }
+
+  return changed; 
 }
 
 namespace {
@@ -222,6 +254,7 @@ namespace {
 	changed |= foldSameTargetBranches(F);
 	changed |= removeUnreachableBlocksLocal(F);
 	changed |= bypassBlock(F);
+	changed |= eliminateDeadAllocas(F);
 	
 	if(changed)
 	  localyChanged = true;
