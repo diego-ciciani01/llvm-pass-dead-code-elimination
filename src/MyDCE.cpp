@@ -13,9 +13,10 @@
 using namespace llvm;
 
 /*
- * This function is used to verify if the istruction is basicaly dead
- * "mayHaveSideEffects()" -> this single method can cover,
- * operation that alter sthe state of program like: volatile and atomic operations.
+ * Return true if the Instruction is trivialy dead:
+ * no users, is not a terminator and has not apparent side effects.
+ * 
+ * "mayHaveSideEffects()" check: memory write, volatile access, atomic operations, calls etc ...
  */
 static bool isTriviallyDead(Instruction &I){
   if (I.use_empty() && !I.isTerminator() && !I.mayHaveSideEffects())
@@ -36,9 +37,11 @@ static bool deadCodeElimination(Function &F){
   }
   
   /*
-   * The apporach used is the worklist.
-   * Means save in this stak each eligible dead instrcution.
-   * WorkList approch has invariant property: every instruction enters the worklist at most once.
+   * Worklist-base dead eliminatio.
+   *
+   * Initialy used like seed for the first trivialy dead instruction.
+   * If an instruction is removed, it's operands may become candidate to be trivialy dead as well
+   * and since reconsidered. 
    */
   while(!worklist.empty()){
     /* Get back the value from stack */
@@ -55,7 +58,7 @@ static bool deadCodeElimination(Function &F){
 	operands.push_back(OptInst);
     }
 
-    /* Deallocate the current "I" istructtion from graph and free the memory */
+    /* Remove the current "I" istructtion from it's parents basic block.  */
     I->eraseFromParent();
     changed = true;
 	
@@ -63,15 +66,16 @@ static bool deadCodeElimination(Function &F){
     for (Instruction *O : operands){
       if (isTriviallyDead(*O))
 	worklist.push_back(O);  
-    }
-	
+    }	
   }
 
   return changed;
   
 }
 
-/* Folding function to semplify a "complex" with an easier one*/
+/*
+ * Fold conditional branches whose true and false successors
+ */
 static bool foldSameTargetBranches(Function &F){
   bool changed = false;
   
@@ -99,12 +103,15 @@ static bool foldSameTargetBranches(Function &F){
   return changed;
 }
 
+/*
+ * Remove unrechable basic blocks by performing DFS
+ * from the entire block 
+ */
 static bool removeUnreachableBlocksLocal(Function &F){
  
   SmallVector<BasicBlock*, 16> stack; /* stack with, to delete blocks */
   SmallPtrSet<BasicBlock*, 16> checked; /* set with all 'healty' block */
   
-  /* hint "getEntryBlock" get back the first block of the function! */
   for (BasicBlock *BB : depth_first(&F.getEntryBlock())) 
     checked.insert(BB);
   
@@ -143,8 +150,9 @@ static bool removeUnreachableBlocksLocal(Function &F){
 }
 
 /*
- * I decided to avoid bypassing blocks whose successor contains PHI node.
- * Correctly updating the SSA form require additional handling of duplicate incoming edges. 
+ * Conservatly avoid bypassing blocks whose successors contain PHI node.
+ *
+ * Preserved the corrispondence between incoming CFG edges and PHI operands 
  */
 static bool bypassBlock(Function &F){
   bool changed = false;
@@ -191,11 +199,18 @@ static bool bypassBlock(Function &F){
   return changed;
 }
 
+
+/*
+ * Eliminate the stack slot addres whose never escape, and
+ * are never read from.
+ *
+ * Conservately accpet only stores and writing directly into allca.
+ * Any other cases are trated like escape.
+ */
 static bool eliminateDeadAllocas(Function &F){
   SmallVector<AllocaInst *, 16> allocas;
   bool changed = false;
 
-  /* Populate the "allocas" */
   for (BasicBlock &BB : F)
     for (Instruction &I : BB )
       if (AllocaInst *AI = dyn_cast<AllocaInst>(&I))
@@ -248,7 +263,10 @@ namespace {
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM){
       bool changed = false ;
       bool localyChanged = false;
-      /* Main loop */
+      /* Main loop
+       * 
+       * Iterate until a fixed point is reached
+       */
       do{
 	changed = deadCodeElimination(F);
 	changed |= foldSameTargetBranches(F);
