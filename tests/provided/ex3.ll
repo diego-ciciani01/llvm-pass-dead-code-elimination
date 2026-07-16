@@ -40,3 +40,14 @@ define i32 @main(i32 noundef %0, ptr noundef %1) #0 {
 
 declare i32 @printf(ptr noundef, ...) #1
 
+
+; CHECK-LABEL: define i32 @main(i32 noundef %0, ptr noundef %1)
+; CHECK-NOT: alloca
+; CHECK-NOT: store
+; CHECK-NOT: load
+; CHECK-NOT: icmp
+; CHECK-NOT: add
+; CHECK: br label %3
+; CHECK: call i32 {{.*}}@printf
+; CHECK: ret i32 0
+

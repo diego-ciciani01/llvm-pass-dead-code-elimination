@@ -4,3 +4,8 @@ define i32 @main(i32 %argc, ptr %argv) {
   ret i32 0
 }
 
+
+; CHECK-LEBEL: define i32 @main(i32 %argc, ptr %argv)
+; CHECK-NOT: %add = add nsw
+; CHECK-NOT: %mul = mul nsw
+; CHECK: ret i32 0

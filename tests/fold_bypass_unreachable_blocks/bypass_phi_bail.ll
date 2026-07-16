@@ -15,3 +15,10 @@ join:
     call void  @foo(i32 %p)
     ret void
 }
+
+; CHECK-LABEL: define void @f(i32 %a)
+; CHECK: %cond = icmp
+; CHECK: br i1 %cond
+; CHECK: phi
+; CHECK: call
+; CHECK: ret void

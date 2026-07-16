@@ -10,3 +10,9 @@ entry:
     call void @foo1(i32 %c)
     ret void
 }
+
+; CHECK-LABEL: define void @f(ptr %p)
+; CHECK-NOT: %x = add i32
+; CHECK: %c = call
+; CHECK: call void @foo1
+; CHECK: ret void
